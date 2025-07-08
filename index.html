@@ -459,11 +459,7 @@
                 refreshBtn.innerHTML = originalText;
                 refreshBtn.disabled = false;
                 
-                if (allVisitorData.length > 0) {
-                    showMessage(`✅ Refreshed! Found ${allVisitorData.length} visitor records.`, 'success');
-                } else {
-                    showMessage('ℹ️ No visitor data found. Use HelloHub to check in visitors or click "Add Visitor".', 'info');
-                }
+                // Remove the popup messages
             }, 500);
         }
 
@@ -713,7 +709,81 @@
                 return matchesSearch && matchesLocation && matchesStatus;
             });
 
-            displayVisitorData();
+            displayFilteredData(); // Use a separate function for filtered display
+        }
+
+        function displayFilteredData() {
+            if (filteredData.length === 0) {
+                document.getElementById('dataDisplay').innerHTML = 
+                    '<div class="loading">No visitors match your filter criteria.</div>';
+                return;
+            }
+
+            let tableHTML = `
+                <table class="visitor-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>Location</th>
+                            <th>Contact</th>
+                            <th>Arrival</th>
+                            <th>Departure</th>
+                            <th>Status</th>
+                            <th>Feedback</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            filteredData.forEach((visitor, index) => {
+                const statusClass = visitor.status === 'arrived' ? 'status-arrived' : 'status-departed';
+                const toggleAction = visitor.status === 'arrived' ? 'Check Out' : 'Check In';
+                
+                let feedbackHTML = '-';
+                console.log('Checking visitor:', visitor.firstName, visitor.surname, 'Feedback:', visitor.feedback);
+                
+                if (visitor.feedback && visitor.userType === 'visitor') {
+                    const avg = calculateAverageRating(visitor.feedback);
+                    console.log('Average rating calculated:', avg);
+                    feedbackHTML = `
+                        <div style="text-align: center;">
+                            <div style="color: #f39c12; font-weight: bold; margin-bottom: 4px;">
+                                ${generateStars(avg)} <small>(${avg.toFixed(1)})</small>
+                            </div>
+                            <button class="btn" style="padding: 3px 8px; font-size: 10px; background: #17a2b8; color: white;" 
+                                    onclick="showFeedbackDetails(${allVisitorData.indexOf(visitor)})">View Details</button>
+                        </div>
+                    `;
+                } else if (visitor.userType === 'visitor' && visitor.status === 'departed') {
+                    feedbackHTML = '<small style="color: #999;">No feedback provided</small>';
+                }
+                
+                tableHTML += `
+                    <tr>
+                        <td>${new Date(visitor.timestamp).toLocaleTimeString()}</td>
+                        <td><strong>${visitor.firstName} ${visitor.surname}</strong></td>
+                        <td>${visitor.userType.charAt(0).toUpperCase() + visitor.userType.slice(1)}</td>
+                        <td>${visitor.location}</td>
+                        <td>${visitor.email}<br><small>${visitor.mobile}</small></td>
+                        <td>${visitor.arrivalTime || '-'}</td>
+                        <td>${visitor.departureTime || '-'}</td>
+                        <td><span class="status-badge ${statusClass}">${visitor.status.toUpperCase()}</span></td>
+                        <td>${feedbackHTML}</td>
+                        <td>
+                            <button class="btn" style="padding: 5px 10px; font-size: 12px; background: #17a2b8; color: white; margin-right: 5px;" 
+                                    onclick="toggleVisitorStatus(${allVisitorData.indexOf(visitor)})">${toggleAction}</button>
+                            <button class="btn" style="padding: 5px 10px; font-size: 12px; background: #dc3545; color: white;" 
+                                    onclick="deleteVisitor(${allVisitorData.indexOf(visitor)})">Delete</button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tableHTML += '</tbody></table>';
+            document.getElementById('dataDisplay').innerHTML = tableHTML;
         }
 
         function clearAllData() {
@@ -830,43 +900,95 @@
             console.log('Available feedback records for PDF:', feedbackData.length);
             
             if (feedbackData.length === 0) {
-                alert('No feedback data found to export!');
+                showMessage('No feedback data found to export!', 'error');
                 return;
             }
             
-            // Generate PDF content as HTML
-            const pdfHTML = generatePDFContent(feedbackData);
+            // Generate CSV content instead of PDF for better compatibility
+            const csvContent = generateFeedbackCSV(feedbackData);
             
-            // Open in new window for PDF generation
-            const pdfWindow = window.open('', '_blank');
-            if (pdfWindow) {
-                pdfWindow.document.write(pdfHTML);
-                pdfWindow.document.close();
+            // Try to download as CSV file
+            try {
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                const url = URL.createObjectURL(blob);
+                link.setAttribute('href', url);
+                link.setAttribute('download', `feedback-report-${new Date().toISOString().split('T')[0]}.csv`);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
                 
-                // Add print functionality
-                setTimeout(() => {
-                    pdfWindow.print();
-                }, 1000);
-                
-                alert(`📄 PDF Report Generated!
-
-A new window has opened with your feedback report.
-Use your browser's print function (Ctrl+P) and:
-1. Select "Save as PDF" as the destination
-2. Choose "More settings" > "Paper size" > A4
-3. Set margins to "Minimum"
-4. Click "Save"
-
-The PDF will contain all ${feedbackData.length} feedback records with star ratings and analysis.`);
-            } else {
-                // Fallback if popup is blocked
-                alert(`📄 Popup blocked! 
-
-Your browser blocked the PDF window. 
-Please allow popups for this site and try again.
-
-Alternative: Use the CSV export option to get your data.`);
+                showMessage(`✅ Exported ${feedbackData.length} feedback records as CSV!`, 'success');
+            } catch (error) {
+                console.error('Download failed:', error);
+                // Fallback to showing the data
+                showExportFallback(csvContent, feedbackData.length);
             }
+        }
+
+        function generateFeedbackCSV(feedbackData) {
+            const headers = [
+                'Date', 'Time', 'Visitor Name', 'Location', 'Email', 'Mobile',
+                'Overall Rating', 'Safety Rating', 'Responsive Rating', 'Caring Rating', 
+                'Leadership Rating', 'Effectiveness Rating', 'Average Rating', 'Additional Comments'
+            ];
+            
+            let csvContent = headers.join(',') + '\n';
+            
+            feedbackData.forEach(visitor => {
+                const feedback = visitor.feedback;
+                const avgRating = calculateAverageRating(feedback);
+                
+                const row = [
+                    new Date(visitor.timestamp).toLocaleDateString(),
+                    new Date(visitor.timestamp).toLocaleTimeString(),
+                    `"${visitor.firstName} ${visitor.surname}"`,
+                    visitor.location,
+                    visitor.email,
+                    visitor.mobile,
+                    feedback.overall,
+                    feedback.safety,
+                    feedback.responsive,
+                    feedback.caring,
+                    feedback.leadership,
+                    feedback.effectiveness,
+                    avgRating.toFixed(1),
+                    `"${feedback.additionalComments || 'No comments'}"`
+                ];
+                
+                csvContent += row.join(',') + '\n';
+            });
+            
+            return csvContent;
+        }
+
+        function showExportFallback(csvContent, recordCount) {
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+                background: rgba(0,0,0,0.5); z-index: 1000; display: flex; 
+                align-items: center; justify-content: center;
+            `;
+            
+            const content = document.createElement('div');
+            content.style.cssText = `
+                background: white; padding: 30px; border-radius: 15px; 
+                width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto;
+            `;
+            
+            content.innerHTML = `
+                <h3 style="margin-bottom: 20px; color: #333;">📄 Feedback Export (${recordCount} records)</h3>
+                <p style="margin-bottom: 15px;">Copy this data and paste it into Excel or Google Sheets:</p>
+                <textarea style="width: 100%; height: 300px; font-family: monospace; font-size: 12px; border: 1px solid #ccc; padding: 10px;" readonly>${csvContent}</textarea>
+                <div style="margin-top: 20px; text-align: center;">
+                    <button onclick="this.parentElement.parentElement.parentElement.remove()" style="background: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">Close</button>
+                    <button onclick="navigator.clipboard.writeText(\`${csvContent.replace(/`/g, '\\`')}\`).then(() => alert('Copied to clipboard!'))" style="background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin-left: 10px;">Copy to Clipboard</button>
+                </div>
+            `;
+            
+            modal.appendChild(content);
+            document.body.appendChild(modal);
         }
 
         // Remove the old CSV export function and replace with PDF
@@ -1580,4 +1702,4 @@ INSTRUCTIONS:
         });
     </script>
 </body>
-</html>
+</html>,
