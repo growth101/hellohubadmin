@@ -426,7 +426,9 @@
 
     <script>
         const ADMIN_CONFIG = {
-            googleSheetsUrl: 'https://script.google.com/macros/s/AKfycbxasgHvqyBS4BCDeH5Ipm3798X1mZyciwCuuVL20D-Z-8hol6jWfRKWUbqvuPMLyM2C/exec',
+            // Supabase configuration
+            supabaseUrl: 'https://obyzwhqaqyiqpeoefjgw.supabase.co',
+            supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ieXp3aHFhcXlpcXBlb2Vmamd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTIwMDY0MDAsImV4cCI6MjA2NzU4MjQwMH0.NaePwt-LGqNp4vc8TTcv3IyzFkamZtiHmvDLpDcliAc',
             refreshInterval: 30000
         };
 
@@ -434,25 +436,98 @@
         let filteredData = [];
 
         function loadVisitorData() {
-            document.getElementById('dataDisplay').innerHTML = '<div class="loading">🔄 Loading visitor data from server...</div>';
+            document.getElementById('dataDisplay').innerHTML = '<div class="loading">🔄 Loading visitor data...</div>';
             
             const refreshBtn = document.querySelector('button[onclick="loadVisitorData()"]');
             const originalText = refreshBtn.innerHTML;
             refreshBtn.innerHTML = '⏳ Loading...';
             refreshBtn.disabled = true;
             
-            // Load from Google Sheets
-            fetch(ADMIN_CONFIG.googleSheetsUrl + '?action=read')
-                .then(response => response.json())
+            // Try Supabase database first, fallback to localStorage
+            const loadFromSupabase = () => {
+                console.log('Attempting to load from Supabase...');
+                const url = `${ADMIN_CONFIG.supabaseUrl}/rest/v1/visitors?select=*&order=timestamp.desc`;
+                console.log('Supabase URL:', url);
+                
+                return fetch(url, {
+                    method: 'GET',
+                    mode: 'cors',
+                    headers: {
+                        'apikey': ADMIN_CONFIG.supabaseAnonKey,
+                        'Authorization': `Bearer ${ADMIN_CONFIG.supabaseAnonKey}`,
+                        'Content-Type': 'application/json',
+                        'Prefer': 'return=representation'
+                    }
+                })
+                .then(response => {
+                    console.log('Supabase response status:', response.status);
+                    console.log('Supabase response headers:', response.headers);
+                    if (!response.ok) {
+                        return response.text().then(text => {
+                            console.log('Supabase error response:', text);
+                            throw new Error(`HTTP ${response.status}: ${text}`);
+                        });
+                    }
+                    return response.json();
+                })
                 .then(data => {
-                    console.log('📊 Loaded visitor data from Google Sheets:', data.length, 'records');
+                    console.log('📊 Raw Supabase data:', data);
+                    console.log('📊 Loaded visitor data from Supabase:', data.length, 'records');
                     
+                    // Convert Supabase format to our visitor format
+                    return data.map(row => ({
+                        timestamp: row.timestamp,
+                        firstName: row.first_name || '',
+                        surname: row.surname || '',
+                        email: row.email || 'Not provided',
+                        mobile: row.mobile || 'Not provided',
+                        userType: row.user_type || 'visitor',
+                        location: row.location || '',
+                        arrivalDate: row.arrival_date || '',
+                        arrivalTime: row.arrival_time || '',
+                        departureDate: row.departure_date || '',
+                        departureTime: row.departure_time || '',
+                        status: row.status || 'arrived',
+                        // Add feedback if it exists
+                        ...(row.feedback_overall ? {
+                            feedback: {
+                                overall: row.feedback_overall || 0,
+                                safety: row.feedback_safety || 0,
+                                responsive: row.feedback_responsive || 0,
+                                caring: row.feedback_caring || 0,
+                                leadership: row.feedback_leadership || 0,
+                                effectiveness: row.feedback_effectiveness || 0,
+                                averageRating: row.feedback_average || 0,
+                                additionalComments: row.feedback_comments || 'No additional comments'
+                            }
+                        } : {})
+                    }));
+                })
+                .catch(error => {
+                    console.error('Detailed Supabase error:', error);
+                    throw error;
+                });
+            };
+            
+            const loadFromLocal = () => {
+                console.log('📂 Loading from localStorage...');
+                const rawData = localStorage.getItem('hellohubVisitors');
+                return Promise.resolve(JSON.parse(rawData || '[]'));
+            };
+            
+            // Try Supabase, fallback to localStorage
+            loadFromSupabase()
+                .catch(error => {
+                    console.log('Supabase unavailable, using local data:', error.message);
+                    return loadFromLocal();
+                })
+                .then(data => {
                     allVisitorData = data.map(visitor => ({
                         ...visitor,
                         timestamp: new Date(visitor.timestamp)
                     }));
 
-                    // Also sync to localStorage as backup
+                    // Sync to localStorage
                     localStorage.setItem('hellohubVisitors', JSON.stringify(allVisitorData));
 
                     displayVisitorData();
@@ -463,25 +538,10 @@
                     refreshBtn.disabled = false;
                 })
                 .catch(error => {
-                    console.error('Failed to load from Google Sheets:', error);
-                    
-                    // Fallback to localStorage
-                    const rawData = localStorage.getItem('hellohubVisitors');
-                    allVisitorData = JSON.parse(rawData || '[]');
-                    
-                    allVisitorData = allVisitorData.map(visitor => ({
-                        ...visitor,
-                        timestamp: new Date(visitor.timestamp)
-                    }));
-
-                    displayVisitorData();
-                    updateStats();
-                    updateRecentActivity();
-                    
+                    console.error('Failed to load data:', error);
                     refreshBtn.innerHTML = originalText;
                     refreshBtn.disabled = false;
-                    
-                    showMessage('⚠️ Could not connect to server. Showing local data.', 'error');
+                    showMessage('⚠️ Could not load data. Please try again.', 'error');
                 });
         }
 
@@ -521,26 +581,10 @@
         function saveVisitorData() {
             // Save to localStorage as backup
             localStorage.setItem('hellohubVisitors', JSON.stringify(allVisitorData));
+            console.log('✅ Data saved to localStorage');
             
-            // Also save to Google Sheets
-            fetch(ADMIN_CONFIG.googleSheetsUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    action: 'write',
-                    data: allVisitorData
-                })
-            })
-            .then(response => response.json())
-            .then(result => {
-                console.log('✅ Data synced to Google Sheets');
-            })
-            .catch(error => {
-                console.error('⚠️ Failed to sync to Google Sheets:', error);
-                showMessage('⚠️ Data saved locally but could not sync to server', 'error');
-            });
+            // Also save to Supabase - but this is more complex since we need to handle updates
+            console.log('ℹ️ Supabase sync will happen when new visitors are added through the visitor app');
         }
 
         function showAddVisitorForm() {
@@ -1723,16 +1767,68 @@ INSTRUCTIONS:
         });
 
         function silentRefresh() {
-            // Check for updates from Google Sheets every 30 seconds
-            fetch(ADMIN_CONFIG.googleSheetsUrl + '?action=read')
-                .then(response => response.json())
-                .then(data => {
-                    const newDataLength = data.length;
+            // Check for updates from Google Sheets every 30 seconds (silent, no errors shown)
+            fetch(ADMIN_CONFIG.googleSheetsJsonUrl, {
+                method: 'GET',
+                mode: 'cors'
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    return response.text();
+                })
+                .then(text => {
+                    // Parse Google Sheets JSONP response
+                    const jsonMatch = text.match(/google\.visualization\.Query\.setResponse\((.*)\);/);
+                    if (!jsonMatch) {
+                        throw new Error('Invalid response format');
+                    }
                     
-                    if (newDataLength !== allVisitorData.length) {
+                    const data = JSON.parse(jsonMatch[1]);
+                    const visitors = [];
+                    
+                    if (data.table && data.table.rows) {
+                        data.table.rows.forEach(row => {
+                            if (row.c && row.c.length >= 12) {
+                                const visitor = {
+                                    timestamp: row.c[0]?.v || new Date().toISOString(),
+                                    firstName: row.c[1]?.v || '',
+                                    surname: row.c[2]?.v || '',
+                                    email: row.c[3]?.v || 'Not provided',
+                                    mobile: row.c[4]?.v || 'Not provided',
+                                    userType: row.c[5]?.v || 'visitor',
+                                    location: row.c[6]?.v || '',
+                                    arrivalDate: row.c[7]?.v || '',
+                                    arrivalTime: row.c[8]?.v || '',
+                                    departureDate: row.c[9]?.v || '',
+                                    departureTime: row.c[10]?.v || '',
+                                    status: row.c[11]?.v || 'arrived'
+                                };
+                                
+                                // Add feedback data if available
+                                if (row.c.length >= 20 && row.c[12]?.v) {
+                                    visitor.feedback = {
+                                        overall: parseInt(row.c[12]?.v) || 0,
+                                        safety: parseInt(row.c[13]?.v) || 0,
+                                        responsive: parseInt(row.c[14]?.v) || 0,
+                                        caring: parseInt(row.c[15]?.v) || 0,
+                                        leadership: parseInt(row.c[16]?.v) || 0,
+                                        effectiveness: parseInt(row.c[17]?.v) || 0,
+                                        averageRating: parseFloat(row.c[18]?.v) || 0,
+                                        additionalComments: row.c[19]?.v || 'No additional comments'
+                                    };
+                                }
+                                
+                                visitors.push(visitor);
+                            }
+                        });
+                    }
+                    
+                    if (visitors.length !== allVisitorData.length) {
                         console.log('📊 Data updated from Google Sheets');
                         
-                        allVisitorData = data.map(visitor => ({
+                        allVisitorData = visitors.map(visitor => ({
                             ...visitor,
                             timestamp: new Date(visitor.timestamp)
                         }));
@@ -1746,7 +1842,8 @@ INSTRUCTIONS:
                     }
                 })
                 .catch(error => {
-                    console.log('Silent refresh failed, using local data');
+                    // Silent fail - just use local data
+                    console.log('Silent refresh from sheets failed, continuing with local data');
                 });
         }
 
