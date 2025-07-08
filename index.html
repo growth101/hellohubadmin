@@ -434,33 +434,55 @@
         let filteredData = [];
 
         function loadVisitorData() {
-            document.getElementById('dataDisplay').innerHTML = '<div class="loading">🔄 Refreshing visitor data...</div>';
+            document.getElementById('dataDisplay').innerHTML = '<div class="loading">🔄 Loading visitor data from server...</div>';
             
             const refreshBtn = document.querySelector('button[onclick="loadVisitorData()"]');
             const originalText = refreshBtn.innerHTML;
-            refreshBtn.innerHTML = '⏳ Refreshing...';
+            refreshBtn.innerHTML = '⏳ Loading...';
             refreshBtn.disabled = true;
             
-            setTimeout(() => {
-                const rawData = localStorage.getItem('hellohubVisitors');
-                allVisitorData = JSON.parse(rawData || '[]');
-                
-                console.log('📊 Loaded visitor data:', allVisitorData.length, 'records');
-                
-                allVisitorData = allVisitorData.map(visitor => ({
-                    ...visitor,
-                    timestamp: new Date(visitor.timestamp)
-                }));
+            // Load from Google Sheets
+            fetch(ADMIN_CONFIG.googleSheetsUrl + '?action=read')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('📊 Loaded visitor data from Google Sheets:', data.length, 'records');
+                    
+                    allVisitorData = data.map(visitor => ({
+                        ...visitor,
+                        timestamp: new Date(visitor.timestamp)
+                    }));
 
-                displayVisitorData();
-                updateStats();
-                updateRecentActivity();
-                
-                refreshBtn.innerHTML = originalText;
-                refreshBtn.disabled = false;
-                
-                // Remove the popup messages
-            }, 500);
+                    // Also sync to localStorage as backup
+                    localStorage.setItem('hellohubVisitors', JSON.stringify(allVisitorData));
+
+                    displayVisitorData();
+                    updateStats();
+                    updateRecentActivity();
+                    
+                    refreshBtn.innerHTML = originalText;
+                    refreshBtn.disabled = false;
+                })
+                .catch(error => {
+                    console.error('Failed to load from Google Sheets:', error);
+                    
+                    // Fallback to localStorage
+                    const rawData = localStorage.getItem('hellohubVisitors');
+                    allVisitorData = JSON.parse(rawData || '[]');
+                    
+                    allVisitorData = allVisitorData.map(visitor => ({
+                        ...visitor,
+                        timestamp: new Date(visitor.timestamp)
+                    }));
+
+                    displayVisitorData();
+                    updateStats();
+                    updateRecentActivity();
+                    
+                    refreshBtn.innerHTML = originalText;
+                    refreshBtn.disabled = false;
+                    
+                    showMessage('⚠️ Could not connect to server. Showing local data.', 'error');
+                });
         }
 
         function showMessage(text, type = 'info') {
@@ -497,7 +519,28 @@
         }
 
         function saveVisitorData() {
+            // Save to localStorage as backup
             localStorage.setItem('hellohubVisitors', JSON.stringify(allVisitorData));
+            
+            // Also save to Google Sheets
+            fetch(ADMIN_CONFIG.googleSheetsUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    action: 'write',
+                    data: allVisitorData
+                })
+            })
+            .then(response => response.json())
+            .then(result => {
+                console.log('✅ Data synced to Google Sheets');
+            })
+            .catch(error => {
+                console.error('⚠️ Failed to sync to Google Sheets:', error);
+                showMessage('⚠️ Data saved locally but could not sync to server', 'error');
+            });
         }
 
         function showAddVisitorForm() {
@@ -1680,18 +1723,31 @@ INSTRUCTIONS:
         });
 
         function silentRefresh() {
-            const rawData = localStorage.getItem('hellohubVisitors');
-            const newData = JSON.parse(rawData || '[]');
-            
-            if (newData.length !== allVisitorData.length) {
-                allVisitorData = newData.map(visitor => ({
-                    ...visitor,
-                    timestamp: new Date(visitor.timestamp)
-                }));
-                displayVisitorData();
-                updateStats();
-                updateRecentActivity();
-            }
+            // Check for updates from Google Sheets every 30 seconds
+            fetch(ADMIN_CONFIG.googleSheetsUrl + '?action=read')
+                .then(response => response.json())
+                .then(data => {
+                    const newDataLength = data.length;
+                    
+                    if (newDataLength !== allVisitorData.length) {
+                        console.log('📊 Data updated from Google Sheets');
+                        
+                        allVisitorData = data.map(visitor => ({
+                            ...visitor,
+                            timestamp: new Date(visitor.timestamp)
+                        }));
+                        
+                        // Update localStorage backup
+                        localStorage.setItem('hellohubVisitors', JSON.stringify(allVisitorData));
+                        
+                        displayVisitorData();
+                        updateStats();
+                        updateRecentActivity();
+                    }
+                })
+                .catch(error => {
+                    console.log('Silent refresh failed, using local data');
+                });
         }
 
         setInterval(() => silentRefresh(), ADMIN_CONFIG.refreshInterval);
