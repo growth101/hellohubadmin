@@ -1412,5 +1412,57 @@
             checkExistingSession();
         });
     </script>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+<script>
+  const supabase = supabase.createClient(
+    'https://obyzwhqaqyiqpeoefjgw.supabase.co',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ieXp3aHFhcXlpcXBlb2Vmamd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTIwMDY0MDAsImV4cCI6MjA2NzU4MjQwMH0.NaePwt-LGqNp4vc8TTcv3IyzFkamZtiHmvDLpDcliAc'
+  );
+
+  async function loadVisitorData() {
+    const container = document.getElementById('dataDisplay');
+    if (!container) return;
+    container.innerHTML = '<div class="loading">Loading visitor data...</div>';
+
+    const { data, error } = await supabase
+      .from('visitors')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      container.innerHTML = `<div class="error">Failed to load visitor data.</div>`;
+      console.error(error);
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      container.innerHTML = `<div class="loading">No visitor data found.</div>`;
+      return;
+    }
+
+    let html = `<table class="visitor-table"><thead><tr>
+      <th>First Name</th><th>Surname</th><th>Email</th><th>Mobile</th>
+      <th>User Type</th><th>Location</th><th>Status</th><th>Created</th>
+    </tr></thead><tbody>`;
+
+    data.forEach(row => {
+      html += `<tr>
+        <td>${row.first_name || ''}</td>
+        <td>${row.surname || ''}</td>
+        <td>${row.email || ''}</td>
+        <td>${row.mobile || ''}</td>
+        <td>${row.user_type || ''}</td>
+        <td>${row.location || ''}</td>
+        <td>${row.status || ''}</td>
+        <td>${new Date(row.created_at).toLocaleString()}</td>
+      </tr>`;
+    });
+
+    html += `</tbody></table>`;
+    container.innerHTML = html;
+  }
+</script>
+
 </body>
 </html>
